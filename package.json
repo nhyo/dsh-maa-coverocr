@@ -1,0 +1,50 @@
+{
+  "name": "dsh-maa-coverocr",
+  "version": "0.1.0",
+  "description": "Companion plugin for dsh-maa-cli: reads a Bilibili Arknights strategy video (title, description, tags, the uploader's comments and the cover via MAA's own OCR models) and reports which operators it uses.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./cordis.patch.yml": "./config/cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "config",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "jpeg-js": "^0.4.4",
+    "onnxruntime-node": "^1.31.1"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./config/cordis.patch.yml"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "dsh",
+    "maa",
+    "arknights",
+    "bilibili",
+    "ocr",
+    "deepseek-harness"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nhyo/dsh-maa-coverocr.git"
+  },
+  "license": "MIT"
+}
