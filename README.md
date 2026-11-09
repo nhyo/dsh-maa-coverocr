@@ -1,5 +1,10 @@
 # dsh-maa-coverocr
 
+[![npm](https://img.shields.io/npm/v/dsh-maa-coverocr.svg)](https://www.npmjs.com/package/dsh-maa-coverocr)
+[![license](https://img.shields.io/npm/l/dsh-maa-coverocr.svg)](LICENSE)
+[![node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
+[![companion of dsh-maa-cli](https://img.shields.io/badge/companion%20of-dsh--maa--cli-blue)](https://github.com/nhyo/dsh-maa-cli)
+
 [dsh-maa-cli](https://github.com/nhyo/dsh-maa-cli) 的辅助插件：读取一个 B 站明日方舟作业视频，告诉 dsh-maa-cli 这个视频用了哪些干员。dsh-maa-cli 再拿结果和你的干员 Box 比较，推荐你能抄的视频，并给出视频链接，由你自己去看视频抄作业。
 
 本插件不单独使用，也不会操作游戏。
