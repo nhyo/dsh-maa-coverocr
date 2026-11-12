@@ -5,7 +5,9 @@
 [![node](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![companion of dsh-maa-cli](https://img.shields.io/badge/companion%20of-dsh--maa--cli-blue)](https://github.com/nhyo/dsh-maa-cli)
 
-[dsh-maa-cli](https://github.com/nhyo/dsh-maa-cli) 的辅助插件：读取一个 B 站明日方舟作业视频，告诉 dsh-maa-cli 这个视频用了哪些干员。dsh-maa-cli 再拿结果和你的干员 Box 比较，推荐你能抄的视频，并给出视频链接，由你自己去看视频抄作业。
+简体中文 | [English](README.en.md)
+
+[dsh-maa-cli](https://github.com/nhyo/dsh-maa-cli) 的辅助插件：按关卡搜索 B 站明日方舟作业，或读取指定视频链接，只识别封面上的阵容。dsh-maa-cli 再拿结果和你的干员 Box 比较，推荐你能抄的视频；每条推荐都必须附对应视频链接，由你自己看视频抄作业。
 
 本插件不单独使用，也不会操作游戏。
 
@@ -17,7 +19,15 @@
 /maa ext install coverocr
 ```
 
-dsh-maa-cli 会安装本插件，并把它登记到当前 DSH 配置。安装前会先显示要执行的操作，要你确认。
+dsh-maa-cli 会直接安装本插件，并把它登记到当前 DSH 配置。
+
+## 搜索方式
+
+直接对 DSH 说“帮我找 TL-EX-8 的 B 站作业”。插件只按“明日方舟 + 关卡”搜索（例如 `明日方舟 TL-EX-8`），最多返回 5 个候选，只读取视频元数据和封面；不会请求播放地址、下载视频流或分析视频画面。每条结果都会保留对应视频链接。
+
+搜索按照 B 站网页端请求协议生成 WBI 签名并取得匿名设备标识。插件会把匿名设备标识与 WBI 缓存保存在 `~/.dsh-maa-coverocr/bilibili-session.json`，后续搜索和 DSH 重启后都复用同一会话。所有 B 站请求进入同一个串行队列，默认间隔 800–1300 ms。
+
+签名请求第一次遇到 `-352`、`-412` 或 `-509` 时，会强制刷新 WBI 密钥并只重试一次；仍然失败才进入持久冷却。冷却按 10、30、60、120 分钟递增，记录在 `~/.dsh-maa-coverocr/bilibili-risk.json`，重启 DSH 不会绕过冷却。错误会明确标出发生在设备标识、WBI、搜索、视频详情、标签、评论还是封面下载阶段。
 
 也可以手动安装：
 
@@ -44,18 +54,22 @@ dsh plugin --profile <配置名> add dsh-maa-coverocr
 
 ## 限制
 
-- **只能处理你给的视频链接，不支持按关卡搜索**。B 站的搜索接口会拒绝非浏览器的请求，本插件也不伪装成浏览器。
-- **请求如实表明身份**。所有请求的 User-Agent 都是 `dsh-maa-coverocr`；B 站拒绝时，直接报告错误。
+- **搜索依赖 B 站未公开的网页接口**，网页协议变化后可能需要更新插件；B 站拒绝时会直接报告错误。
+- **搜索只看封面**，不会通过视频内容补全阵容。封面不是编队截图时，结果可能严重不完整。
 - **封面没有文字时，读不出干员**。比如只放了立绘的封面。
 - **安装体积较大**。依赖 `onnxruntime-node`，安装后约 300 MB，因为它自带多平台的运行库。识别模型不随插件下载，直接用 MAA 运行时里已有的。
 
-## 服务接口（API 版本 1）
+## 服务接口（API 版本 2）
 
 本插件提供 cordis 服务 `maaCoverocr`：
 
 ```js
 const service = ctx.get('maaCoverocr')
-service.apiVersion // 1
+service.apiVersion // 2
+await service.bilibiliStatus() // 登录态、匿名设备和冷却状态（不返回 Cookie 内容）
+await service.setBilibiliCookie('SESSDATA=…; bili_jct=…') // 可选；只保存在本机私有状态文件
+await service.searchVideos({ query: 'TL-EX-8', limit: 5, operatorNames: [...], resourceDir, signal })
+// → { query, videos: [与 analyzeVideo 相同的结果] }
 await service.analyzeVideo({
   video: 'https://www.bilibili.com/video/BV…', // 也可以是 BV 号或 b23.tv 短链接
   operatorNames: [...],                        // 干员名单，来自 MAA battle_data.json

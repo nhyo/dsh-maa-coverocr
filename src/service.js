@@ -1,4 +1,4 @@
-// The `maaCoverocr` service consumed by dsh-maa-cli (API version 1).
+// The `maaCoverocr` service consumed by dsh-maa-cli (API version 2).
 //
 //   analyzeVideo({ video, operatorNames, resourceDir, signal }) →
 //     { video, operators, cover, text, maaCodes, warnings }
@@ -7,26 +7,46 @@
 // battle_data.json names and the MAA resource directory holding the OCR
 // models), so this plugin never needs dsh-maa-cli's internals.
 import { readFileSync } from 'node:fs'
-import { fetchCover, fetchVideo, resolveVideoId } from './bilibili.js'
+import { createBilibiliClient, fetchCover, fetchVideo, resolveVideoId, searchVideos } from './bilibili.js'
 import { analyzeCoverLines, createNameIndex, extractMaaCodes, findOperatorsInText, mergeLineup } from './lineup.js'
 import { getOcrEngine } from './ocr.js'
 
 export const SERVICE_NAME = 'maaCoverocr'
-export const API_VERSION = 1
+export const API_VERSION = 2
 export const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 
 export function createCoverocrService(options = {}) {
   const getEngine = options.getEngine ?? getOcrEngine
+  const bilibili = options.bilibiliClient ?? createBilibiliClient({
+    fetchImpl: options.fetchImpl,
+    stateDir: options.stateDir,
+    minIntervalMs: options.minIntervalMs,
+    jitterMs: options.jitterMs,
+    now: options.now,
+    random: options.random,
+  })
   return Object.freeze({
     apiVersion: API_VERSION,
     packageName: 'dsh-maa-coverocr',
     version: PACKAGE_VERSION,
+    async bilibiliStatus() { return await bilibili.status() },
+    async setBilibiliCookie(cookie) { return await bilibili.setCookie(cookie) },
+    async searchVideos(request = {}) {
+      const limit = Math.min(5, Math.max(1, Number(request.limit) || 5))
+      const found = await searchVideos(request.query, { client: bilibili, signal: request.signal, limit })
+      const results = []
+      for (const video of found) {
+        if (results.length >= limit) break
+        results.push(await this.analyzeVideo({ ...request, video: video.bvid, coverOnly: true }))
+      }
+      return { query: String(request.query ?? '').trim(), videos: results }
+    },
     async analyzeVideo(request = {}) {
-      const io = { fetchImpl: options.fetchImpl, signal: request.signal }
+      const io = { client: bilibili, signal: request.signal }
       const index = createNameIndex(request.operatorNames, request.aliases)
       if (index.names.size === 0) throw new Error('没有提供干员名单，无法识别阵容。')
       const bvid = await resolveVideoId(request.video, io)
-      const { video, warnings } = await fetchVideo(bvid, io)
+      const { video, warnings } = await fetchVideo(bvid, { ...io, coverOnly: request.coverOnly === true })
 
       const text = {
         title: findOperatorsInText(video.title, index).map(item => item.name),

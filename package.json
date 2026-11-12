@@ -1,7 +1,7 @@
 {
   "name": "dsh-maa-coverocr",
-  "version": "0.1.0",
-  "description": "Companion plugin for dsh-maa-cli: reads a Bilibili Arknights strategy video (title, description, tags, the uploader's comments and the cover via MAA's own OCR models) and reports which operators it uses.",
+  "version": "0.2.0",
+  "description": "Companion plugin for dsh-maa-cli: searches Bilibili Arknights guides and recognizes operator lineups from cover images with MAA's OCR models, without downloading video streams.",
   "type": "module",
   "main": "src/index.js",
   "exports": {
@@ -13,6 +13,7 @@
     "src",
     "config",
     "README.md",
+    "README.en.md",
     "CHANGELOG.md"
   ],
   "scripts": {

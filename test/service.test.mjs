@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveVideoId, USER_AGENT } from '../src/bilibili.js'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { createBilibiliClient, resolveVideoId, searchVideos, USER_AGENT } from '../src/bilibili.js'
 import { apply, API_VERSION, createCoverocrService, SERVICE_NAME } from '../src/index.js'
 
 const NAMES = ['维什戴尔', '结城理', '白面鸮', '冻河', '圣聆初雪', '凯尔希', '史尔特尔']
@@ -9,6 +12,7 @@ const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
 function fakeBilibili(overrides = {}) {
   const calls = []
   const routes = {
+    '/x/frontend/finger/spi': { code: 0, data: { b_3: 'BUVID3', b_4: 'BUVID4' } },
     '/x/web-interface/view': { code: 0, data: { bvid: 'BV1upWJ6YEf3', aid: 42, title: '【明日方舟】TL-EX-8突袭 5人摆完挂机', desc: '42 单核也行 maa://12345', owner: { mid: 7, name: 'UP' }, pic: 'http://i1.hdslb.com/bfs/archive/abc.jpg', duration: 188 } },
     '/x/tag/archive/tags': { code: 0, data: [{ tag_name: '作业' }, { tag_name: '冻河' }] },
     '/x/v2/reply': { code: 0, data: { upper: { top: { rpid: 1, mid: 7, content: { message: '置顶：凯尔希可换' } } }, replies: [
@@ -43,6 +47,8 @@ test('the plugin entry provides the versioned service', () => {
   assert.equal(SERVICE_NAME, 'maaCoverocr')
   assert.equal(provided.maaCoverocr.apiVersion, API_VERSION)
   assert.equal(typeof provided.maaCoverocr.analyzeVideo, 'function')
+  assert.equal(typeof provided.maaCoverocr.bilibiliStatus, 'function')
+  assert.equal(typeof provided.maaCoverocr.setBilibiliCookie, 'function')
 })
 
 test('resolves BV ids, video URLs and b23.tv short links; rejects other hosts', async () => {
@@ -55,7 +61,69 @@ test('resolves BV ids, video URLs and b23.tv short links; rejects other hosts', 
   await assert.rejects(resolveVideoId('https://example.com/video/BV1upWJ6YEf3'), /只支持 bilibili\.com/u)
 })
 
-test('analyzes a video from text and cover, with sources and honest requests', async () => {
+test('search obtains anonymous device ids, signs WBI parameters and returns video candidates', async () => {
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(url)
+    calls.push({ parsed, init })
+    if (parsed.pathname === '/x/frontend/finger/spi') return Response.json({ code: 0, data: { b_3: 'BUVID3', b_4: 'BUVID4' } })
+    if (parsed.pathname === '/x/web-interface/nav') return Response.json({ code: -101, message: '账号未登录', data: { wbi_img: { img_url: 'https://i0.hdslb.com/bfs/wbi/abcdefghijklmnopqrstuvwxyz012345.png', sub_url: 'https://i0.hdslb.com/bfs/wbi/ABCDEFGHIJKLMNOPQRSTUVWXYZ987654.jpg' } } })
+    if (parsed.pathname === '/x/web-interface/search/type') return Response.json({ code: 0, data: { result: [{ bvid: 'BV1upWJ6YEf3', title: '<em class="keyword">TL-EX-8</em> 摆完挂机', author: 'UP', pic: '//i1.hdslb.com/a.jpg', duration: '03:08' }] } })
+    return new Response('not found', { status: 404 })
+  }
+  const result = await searchVideos('TL-EX-8', { fetchImpl, limit: 5 })
+  assert.equal(result[0].title, 'TL-EX-8 摆完挂机')
+  assert.equal(result[0].cover, 'https://i1.hdslb.com/a.jpg')
+  const search = calls.find(call => call.parsed.pathname === '/x/web-interface/search/type')
+  assert.equal(search.parsed.searchParams.get('keyword'), '明日方舟 TL-EX-8')
+  assert.match(search.parsed.searchParams.get('w_rid'), /^[a-f0-9]{32}$/u)
+  assert.match(search.init.headers.cookie, /buvid3=BUVID3/u)
+})
+
+test('one signed 412 refreshes WBI once; a repeated 412 persists cooldown and blocks more requests', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'coverocr-risk-'))
+  test.after(() => rm(dir, { recursive: true, force: true }))
+  let nav = 0; let searches = 0
+  const fetchImpl = async url => {
+    const parsed = new URL(url)
+    if (parsed.pathname === '/x/frontend/finger/spi') return Response.json({ code: 0, data: { b_3: 'B3', b_4: 'B4' } })
+    if (parsed.pathname === '/x/web-interface/nav') { nav += 1; return Response.json({ code: -101, data: { wbi_img: { img_url: `https://i0.hdslb.com/${'a'.repeat(31)}${nav}.png`, sub_url: `https://i0.hdslb.com/${'b'.repeat(31)}${nav}.png` } } }) }
+    if (parsed.pathname === '/x/web-interface/search/type') { searches += 1; return Response.json({ code: -412, message: 'blocked' }) }
+    return new Response('', { status: 404 })
+  }
+  const client = createBilibiliClient({ fetchImpl, stateDir: dir })
+  await assert.rejects(client.search('TL-EX-8'), /已冷却 10 分钟/u)
+  assert.equal(nav, 2, 'WBI is force-refreshed once')
+  assert.equal(searches, 2, 'the signed request is retried only once')
+  const before = searches
+  await assert.rejects(client.search('TL-EX-8'), /风控冷却中/u)
+  assert.equal(searches, before, 'cooldown prevents another search request')
+  const stored = JSON.parse(await readFile(path.join(dir, 'bilibili-risk.json'), 'utf8'))
+  assert.equal(stored.code, -412)
+  assert.equal(stored.strikes, 1)
+})
+
+test('anonymous device identity and an optional login cookie persist across client instances', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'coverocr-session-'))
+  test.after(() => rm(dir, { recursive: true, force: true }))
+  let finger = 0
+  const fetchImpl = async url => {
+    const parsed = new URL(url)
+    if (parsed.pathname === '/x/frontend/finger/spi') { finger += 1; return Response.json({ code: 0, data: { b_3: 'STABLE3', b_4: 'STABLE4' } }) }
+    if (parsed.pathname === '/x/web-interface/nav') return Response.json({ code: -101, data: { wbi_img: { img_url: `https://i0.hdslb.com/${'a'.repeat(32)}.png`, sub_url: `https://i0.hdslb.com/${'b'.repeat(32)}.png` } } })
+    if (parsed.pathname === '/x/web-interface/search/type') return Response.json({ code: 0, data: { result: [] } })
+    return new Response('', { status: 404 })
+  }
+  const first = createBilibiliClient({ fetchImpl, stateDir: dir })
+  await first.setCookie('SESSDATA=test; bili_jct=csrf')
+  await first.search('A')
+  const second = createBilibiliClient({ fetchImpl, stateDir: dir })
+  await second.search('B')
+  assert.equal(finger, 1)
+  assert.deepEqual(await second.status(), { hasCookie: true, hasBuvid: true, cooldownUntil: 0, cooldownMs: 0, strikes: 0, lastRiskCode: 0 })
+})
+
+test('analyzes a video from text and cover, with consistent web requests', async () => {
   const { fetchImpl, calls } = fakeBilibili()
   const engine = fakeEngine([
     { text: '快捷编队', confidence: 1, x: 0, y: 0, w: 80, h: 20 },
@@ -123,6 +191,6 @@ test('tag and comment failures are warnings; a refused view request is an error'
   assert.equal(result.cover.status, 'no-operators')
 
   const refused = fakeBilibili({ '/x/web-interface/view': { code: -412, message: '请求被拦截' } })
-  await assert.rejects(createCoverocrService({ fetchImpl: refused.fetchImpl }).analyzeVideo({ video: 'BV1upWJ6YEf3', operatorNames: NAMES }), /B 站接口错误 -412/u)
+  await assert.rejects(createCoverocrService({ fetchImpl: refused.fetchImpl }).analyzeVideo({ video: 'BV1upWJ6YEf3', operatorNames: NAMES }), /读取视频详情失败：接口错误 -412/u)
   await assert.rejects(createCoverocrService({ fetchImpl: refused.fetchImpl }).analyzeVideo({ video: 'BV1upWJ6YEf3', operatorNames: [] }), /没有提供干员名单/u)
 })
